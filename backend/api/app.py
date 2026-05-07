@@ -27,6 +27,7 @@ from backend.tools.registry import get_global_registry, register_default_tools
 from backend.evaluation.eval_loop import SelfImprovingEvalLoop
 from backend.evaluation.adversarial import AdversarialTester, AttackType
 from backend.db.models import init_db, close_db, get_db, TaskRecord, EvaluationRecord, AdversarialTestRecord
+from backend.api.orchestration_routes import router as orchestration_router
 
 configure_logging(log_level=settings.LOG_LEVEL, json_output=not settings.DEBUG)
 logger = get_logger(__name__)
@@ -122,6 +123,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Mount dynamic orchestration pipeline routes ───────────────────────────────
+app.include_router(orchestration_router)
 
 # ── Pydantic Schemas ──────────────────────────────────────────────────────────
 
