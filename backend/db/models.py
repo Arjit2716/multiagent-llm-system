@@ -83,12 +83,13 @@ _session_factory = None
 def get_engine():
     global _engine
     if _engine is None:
-        _engine = create_async_engine(
-            settings.DATABASE_URL,
-            pool_size=settings.DATABASE_POOL_SIZE,
-            max_overflow=settings.DATABASE_MAX_OVERFLOW,
-            echo=settings.DEBUG,
-        )
+        url = settings.DATABASE_URL
+        is_sqlite = "sqlite" in url
+        kwargs = {"echo": settings.DEBUG}
+        if not is_sqlite:
+            kwargs["pool_size"] = settings.DATABASE_POOL_SIZE
+            kwargs["max_overflow"] = settings.DATABASE_MAX_OVERFLOW
+        _engine = create_async_engine(url, **kwargs)
     return _engine
 
 
