@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+htmlcov/
+.coverage
+dist/
+node_modules/
+*.egg-info/
+.venv/
+venv/
+postgres_data/
+redis_data/
+*.log
