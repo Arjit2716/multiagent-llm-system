@@ -74,6 +74,79 @@ class AdversarialTestRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class EvalHarnessRun(Base):
+    """Stores a full execution of the evaluation harness."""
+    __tablename__ = "eval_harness_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    total_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class EvalHarnessTestCaseResult(Base):
+    """Stores the result of a single test case within a harness run."""
+    __tablename__ = "eval_harness_test_results"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    run_id: Mapped[str] = mapped_column(String(36), index=True)
+    query: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(50))
+    exact_prompts: Mapped[dict] = mapped_column(JSON)
+    exact_tool_calls: Mapped[dict] = mapped_column(JSON)
+    exact_outputs: Mapped[dict] = mapped_column(JSON)
+    
+    answer_correctness: Mapped[float] = mapped_column(Float, default=0.0)
+    answer_correctness_justification: Mapped[str] = mapped_column(Text, default="")
+    
+    citation_accuracy: Mapped[float] = mapped_column(Float, default=0.0)
+    citation_accuracy_justification: Mapped[str] = mapped_column(Text, default="")
+    
+    contradiction_resolution: Mapped[float] = mapped_column(Float, default=0.0)
+    contradiction_resolution_justification: Mapped[str] = mapped_column(Text, default="")
+    
+    tool_selection_efficiency: Mapped[float] = mapped_column(Float, default=0.0)
+    tool_selection_efficiency_justification: Mapped[str] = mapped_column(Text, default="")
+    
+    context_budget_compliance: Mapped[float] = mapped_column(Float, default=0.0)
+    context_budget_compliance_justification: Mapped[str] = mapped_column(Text, default="")
+    
+    critique_agreement_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    critique_agreement_rate_justification: Mapped[str] = mapped_column(Text, default="")
+    
+    overall_score: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ActivePrompt(Base):
+    """Stores the currently active system prompt for each agent."""
+    __tablename__ = "active_prompts"
+    
+    agent_name: Mapped[str] = mapped_column(String(50), primary_key=True)
+    prompt_text: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PromptRewriteProposal(Base):
+    """Stores meta-agent proposals for prompt improvement."""
+    __tablename__ = "prompt_rewrite_proposals"
+    
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    eval_run_id: Mapped[str] = mapped_column(String(36), index=True)
+    target_agent: Mapped[str] = mapped_column(String(50))
+    failed_test_case_ids: Mapped[dict] = mapped_column(JSON) # List of test case IDs that triggered this
+    
+    original_prompt: Mapped[str] = mapped_column(Text)
+    proposed_prompt: Mapped[str] = mapped_column(Text)
+    diff_text: Mapped[str] = mapped_column(Text)
+    justification: Mapped[str] = mapped_column(Text)
+    
+    status: Mapped[str] = mapped_column(String(20), default="pending") # pending, approved, rejected
+    performance_delta: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 # ── Database Engine Setup ─────────────────────────────────────────────────────
 
 _engine = None

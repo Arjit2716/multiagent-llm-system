@@ -95,12 +95,16 @@ class BaseAgent(ABC):
         self.status = AgentStatus.IDLE
         self.system_prompt = system_prompt or self.default_system_prompt()
         self.history: List[AgentMessage] = []
+        self.token_budget = token_budget or settings.MAX_TOKENS
         self.llm = LLMClient(
             model=model or settings.DEFAULT_MODEL,
             agent_name=name,
-            token_budget=token_budget or settings.MAX_TOKENS,
+            token_budget=self.token_budget,
             temperature=temperature,
         )
+        from backend.core.context_manager import context_manager
+        context_manager.declare_budget(self.agent_id, self.token_budget)
+        
         self._start_time: Optional[float] = None
         metrics.active_agents.labels(agent_name=self.name).inc()
         logger.info("agent_initialized", name=self.name, agent_id=self.agent_id)
@@ -118,18 +122,15 @@ class BaseAgent(ABC):
         """Add a message to working memory."""
         msg = AgentMessage(role=role, content=content, tool_name=tool_name)
         self.history.append(msg)
-        # Trim history to prevent context overflow
-        self._trim_history()
+        # Agents should check remaining budget before adding, but if they ignore it and overflow, 
+        # ContextBudgetManager will catch and log it during assemble_context.
 
-    def _trim_history(self, max_messages: int = 20) -> None:
-        """Keep only the most recent messages to stay within token budget."""
-        if len(self.history) > max_messages:
-            # Always keep the first message (often contains task)
-            self.history = [self.history[0]] + self.history[-(max_messages - 1):]
-
-    def get_messages(self) -> List[Dict]:
+    async def get_messages(self) -> List[Dict]:
         """Return history as list of dicts for LLM API."""
-        return [m.to_dict() for m in self.history]
+        from backend.core.context_manager import context_manager
+        raw_msgs = [m.to_dict() for m in self.history]
+        compressed_msgs = await context_manager.assemble_context(self.agent_id, raw_msgs)
+        return compressed_msgs
 
     def clear_history(self) -> None:
         """Reset working memory."""

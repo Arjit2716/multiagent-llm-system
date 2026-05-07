@@ -120,7 +120,7 @@ Select the most appropriate tool and parameters to accomplish this task."""
         self.add_message("user", user_msg)
 
         response = await self.llm.complete(
-            messages=self.get_messages(),
+            messages=await self.get_messages(),
             system_prompt=self.system_prompt,
         )
         self.add_message("assistant", response)
@@ -166,7 +166,7 @@ Select the most appropriate tool and parameters to accomplish this task."""
             output=result_output,
             reasoning=tool_call.get("reasoning", ""),
             tool_calls=tool_calls_log,
-            tokens_used=self.llm.count_tokens(self.get_messages()),
+            tokens_used=self.llm.count_tokens(await self.get_messages()),
         )
 
     def _parse_tool_call(self, response: str) -> Dict:

@@ -94,7 +94,7 @@ Create an execution plan as specified in your instructions.
         
         try:
             response = await self.llm.complete(
-                messages=self.get_messages(),
+                messages=await self.get_messages(),
                 system_prompt=self.system_prompt,
             )
             self.add_message("assistant", response)
@@ -205,7 +205,7 @@ Create an execution plan as specified in your instructions.
 
         # Step 3: Synthesize results
         synthesis = await self._synthesize(task, step_results, synthesis_strategy)
-        total_tokens += self.llm.count_tokens(self.get_messages())
+        total_tokens += self.llm.count_tokens(await self.get_messages())
 
         # Track in history
         self._task_history.append({

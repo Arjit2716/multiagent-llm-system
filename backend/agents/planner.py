@@ -85,14 +85,14 @@ Please analyze this task and create a detailed execution plan following your ins
         self.add_message("user", user_msg)
 
         response = await self.llm.complete(
-            messages=self.get_messages(),
+            messages=await self.get_messages(),
             system_prompt=self.system_prompt,
         )
         self.add_message("assistant", response)
 
         # Parse the plan
         plan = self._parse_plan(response)
-        token_count = self.llm.count_tokens(self.get_messages())
+        token_count = self.llm.count_tokens(await self.get_messages())
 
         return AgentResult(
             agent_name=self.name,

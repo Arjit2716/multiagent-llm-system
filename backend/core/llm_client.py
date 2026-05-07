@@ -120,9 +120,12 @@ class LLMClient:
         Make a completion request with automatic fallback.
         Enforces token budget and records all metrics.
         """
+        from backend.core.prompt_manager import prompt_manager
+        
         full_messages = []
         if system_prompt:
-            full_messages.append({"role": "system", "content": system_prompt})
+            active_system_prompt = await prompt_manager.get_prompt(self.agent_name, system_prompt)
+            full_messages.append({"role": "system", "content": active_system_prompt})
         full_messages.extend(messages)
 
         # Token budget check
@@ -215,14 +218,24 @@ class LLMClient:
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
     ) -> AsyncGenerator[str, None]:
-        """Stream completions token by token."""
+        """Stream completions token by token, emitting trace events per chunk."""
+        from backend.core.prompt_manager import prompt_manager
+        from backend.core.execution_trace import get_tracer, EventType
+
         full_messages = []
         if system_prompt:
-            full_messages.append({"role": "system", "content": system_prompt})
+            active_system_prompt = await prompt_manager.get_prompt(self.agent_name, system_prompt)
+            full_messages.append({"role": "system", "content": active_system_prompt})
         full_messages.extend(messages)
 
         prompt_tokens = self.count_tokens(full_messages)
         max_out = max_tokens or min(self.token_budget - prompt_tokens, settings.MAX_TOKENS)
+        
+        # Determine job_id from context (passed as hint in messages if available)
+        job_id = next(
+            (m.get("job_id", "") for m in messages if isinstance(m, dict) and "job_id" in m),
+            ""
+        )
 
         start = time.monotonic()
         try:
@@ -237,6 +250,8 @@ class LLMClient:
                 delta = chunk.choices[0].delta
                 if delta and delta.content:
                     yield delta.content
+                    if job_id:
+                        get_tracer(job_id).emit_token(delta.content, agent_id=self.agent_name)
         except Exception as e:
             logger.error("llm_stream_error", error=str(e))
             raise

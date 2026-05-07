@@ -189,7 +189,7 @@ Please evaluate this output using your scoring rubric.
         self.add_message("user", user_msg)
 
         response = await self.llm.complete(
-            messages=self.get_messages(),
+            messages=await self.get_messages(),
             system_prompt=self.system_prompt,
         )
         self.add_message("assistant", response)
@@ -219,7 +219,7 @@ Please evaluate this output using your scoring rubric.
             status="success",
             output=eval_result.to_dict(),
             reasoning=eval_result.reasoning,
-            tokens_used=self.llm.count_tokens(self.get_messages()),
+            tokens_used=self.llm.count_tokens(await self.get_messages()),
             eval_score=eval_result.overall_score,
             metadata={"requires_retry": eval_result.requires_retry},
         )

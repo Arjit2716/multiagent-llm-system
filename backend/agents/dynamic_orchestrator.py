@@ -29,6 +29,7 @@ from backend.core.config import settings
 from backend.core.llm_client import LLMClient
 from backend.core.logging import get_logger
 from backend.core import metrics
+from backend.core.execution_trace import get_tracer, EventType
 
 logger = get_logger(__name__)
 
@@ -229,6 +230,15 @@ class DynamicOrchestrator:
         logger.info("orchestration_started", session_id=ctx.session_id, query=ctx.query[:80])
         metrics.agent_tasks_total.labels(agent_name="dynamic_orchestrator", status="started").inc()
 
+        tracer = get_tracer(ctx.session_id)
+        tracer.emit(
+            EventType.PIPELINE_START,
+            agent_id="dynamic_orchestrator",
+            input_text=ctx.query,
+            context_budget_remaining=self.session_token_cap,
+            payload={"query": ctx.query, "max_steps": self.max_steps},
+        )
+
         step = 0
         while step < self.max_steps:
             step += 1
@@ -241,7 +251,29 @@ class DynamicOrchestrator:
             decision = await self._decide_next_agent(ctx)
             if decision is None:
                 logger.info("orchestration_halted", reason="stop_signal_or_budget", steps=step)
+                tracer.emit(
+                    EventType.PIPELINE_DONE,
+                    agent_id="dynamic_orchestrator",
+                    context_budget_remaining=self.session_token_cap - self._tokens_used,
+                    payload={"reason": "stop_signal_or_budget", "steps": step},
+                )
                 break
+
+            # Emit routing decision event
+            tracer.emit(
+                EventType.ROUTING_DECISION,
+                agent_id="dynamic_orchestrator",
+                context_budget_remaining=self.session_token_cap - self._tokens_used,
+                payload={
+                    "selected_agent": decision.selected_agent.value,
+                    "context_budget": decision.context_budget,
+                    "priority_score": decision.priority_score,
+                    "reasoning": decision.reasoning[:200],
+                    "alternatives": decision.alternatives_considered,
+                    "preconditions": decision.preconditions,
+                    "step": step,
+                },
+            )
 
             agent_fn = self._agent_registry.get(decision.selected_agent)
             if not agent_fn:
@@ -250,6 +282,11 @@ class DynamicOrchestrator:
                     f"No callable registered for agent: {decision.selected_agent.value}",
                 )
                 logger.error("no_callable_for_agent", agent=decision.selected_agent.value)
+                tracer.emit(
+                    EventType.POLICY_VIOLATION,
+                    agent_id="dynamic_orchestrator",
+                    policy_violations=[f"No callable for agent {decision.selected_agent.value}"],
+                )
                 break
 
             logger.info(
@@ -259,27 +296,70 @@ class DynamicOrchestrator:
                 budget=decision.context_budget,
             )
 
+            agent_name = decision.selected_agent.value
+            tracer.emit(
+                EventType.AGENT_START,
+                agent_id=agent_name,
+                input_text=ctx.query,
+                context_budget_remaining=self.session_token_cap - self._tokens_used,
+                payload={"allocated_budget": decision.context_budget, "step": step},
+            )
+
             t0 = time.monotonic()
             try:
                 await agent_fn(ctx, token_budget=decision.context_budget)
                 duration = time.monotonic() - t0
+                duration_ms = duration * 1000
                 self._tokens_used += decision.context_budget
+
+                # Snapshot agent output for tracing
+                from backend.agents.shared_context import AgentRole as AR
+                try:
+                    role = AR(agent_name)
+                    agent_out = ctx.get_output(role)
+                    out_text = agent_out.raw_output[:200] if agent_out else ""
+                except Exception:
+                    out_text = ""
+
+                tracer.emit(
+                    EventType.AGENT_COMPLETE,
+                    agent_id=agent_name,
+                    output_text=out_text,
+                    latency_ms=duration_ms,
+                    token_count=decision.context_budget,
+                    context_budget_remaining=self.session_token_cap - self._tokens_used,
+                    payload={"step": step, "total_tokens_used": self._tokens_used},
+                )
                 logger.info(
                     "agent_invocation_complete",
-                    agent=decision.selected_agent.value,
+                    agent=agent_name,
                     duration=round(duration, 2),
                     tokens_used=self._tokens_used,
                 )
             except Exception as e:
                 duration = time.monotonic() - t0
                 ctx.log_error(decision.selected_agent.value, str(e))
+                tracer.emit(
+                    EventType.POLICY_VIOLATION,
+                    agent_id=agent_name,
+                    latency_ms=duration * 1000,
+                    policy_violations=[str(e)],
+                    context_budget_remaining=self.session_token_cap - self._tokens_used,
+                )
                 logger.error(
                     "agent_invocation_failed",
-                    agent=decision.selected_agent.value,
+                    agent=agent_name,
                     error=str(e),
                 )
                 # Don't break — orchestrator may recover by routing to a different agent
 
+        tracer.emit(
+            EventType.PIPELINE_DONE,
+            agent_id="dynamic_orchestrator",
+            output_text=ctx.final_answer or "",
+            context_budget_remaining=self.session_token_cap - self._tokens_used,
+            payload={"steps_taken": step, "has_answer": ctx.final_answer is not None},
+        )
         metrics.agent_tasks_total.labels(agent_name="dynamic_orchestrator", status="done").inc()
         logger.info("orchestration_finished", snapshot=ctx.snapshot())
         return ctx
