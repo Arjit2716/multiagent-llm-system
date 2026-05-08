@@ -30,6 +30,7 @@ from backend.db.models import init_db, close_db, get_db, TaskRecord, EvaluationR
 from backend.api.orchestration_routes import router as orchestration_router
 from backend.api.eval_routes import router as eval_routes_router
 from backend.api.streaming_routes import router as streaming_router
+from backend.api.public_api import router as public_router
 
 configure_logging(log_level=settings.LOG_LEVEL, json_output=not settings.DEBUG)
 logger = get_logger(__name__)
@@ -111,7 +112,18 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description="Production-grade multi-agent LLM orchestration system with self-improving evaluation",
+    description=(
+        "Production-grade multi-agent LLM orchestration system.\n\n"
+        "## Public API (5 endpoints)\n"
+        "| # | Method | Path | Purpose |\n"
+        "|---|---|---|---|\n"
+        "| 1 | `POST` | `/api/v1/query` | Submit query → SSE stream |\n"
+        "| 2 | `GET` | `/api/v1/jobs/{job_id}/trace` | Full execution trace |\n"
+        "| 3 | `GET` | `/api/v1/eval/summary` | Eval breakdown by category & dimension |\n"
+        "| 4 | `POST` | `/api/v1/proposals/{id}/decision` | Approve / reject prompt rewrite |\n"
+        "| 5 | `POST` | `/api/v1/eval/rerun` | Re-eval failed cases with new prompt |\n\n"
+        "All error responses include `error_code`, `message`, and `job_id`."
+    ),
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
@@ -125,7 +137,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Mount dynamic orchestration pipeline routes ───────────────────────────────
+# ── Mount routers ────────────────────────────────────────────────────────────
+app.include_router(public_router)       # ← The canonical 5-endpoint public API
 app.include_router(orchestration_router)
 app.include_router(eval_routes_router)
 app.include_router(streaming_router)
