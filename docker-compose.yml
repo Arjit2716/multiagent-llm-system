@@ -1,72 +1,131 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Multi-Agent LLM System — Docker Compose
+#
+# Usage:
+#   cp .env.example .env   # fill in your API keys
+#   docker compose up -d   # zero manual steps beyond this
+#
+# Services:
+#   api      – FastAPI + uvicorn (port 8000)
+#   worker   – Celery background worker (agent_jobs + eval_jobs queues)
+#   postgres – PostgreSQL 16 (port 5432, internal only)
+#   redis    – Redis 7 broker/result-backend (port 6379, internal only)
+#   logs     – Dozzle lightweight log query UI (port 9999)
+#
+# ALL configuration is injected via environment variables.
+# No credentials are hardcoded anywhere in this file.
+# ══════════════════════════════════════════════════════════════════════════════
+
+x-backend-base: &backend-base         # ← shared image + env block
+  build:
+    context: .
+    dockerfile: Dockerfile.backend
+  env_file:
+    - .env                             # LLM keys, SECRET_KEY, etc.
+  environment:
+    # Internal service URLs – always override what .env says inside Docker
+    - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-multiagent}:${POSTGRES_PASSWORD:-multiagent}@postgres:5432/${POSTGRES_DB:-multiagent_db}
+    - REDIS_URL=redis://redis:6379/0
+    - CELERY_BROKER_URL=redis://redis:6379/1
+    - CELERY_RESULT_BACKEND=redis://redis:6379/2
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks:
+    - multiagent-net
+  restart: unless-stopped
+
 services:
-  # ── Backend API ─────────────────────────────────────────────────────
-  backend:
-    build:
-      context: .
-      dockerfile: Dockerfile.backend
-    container_name: multiagent-backend
-    ports:
-      - "8000:8000"
+
+  # ── API Server ──────────────────────────────────────────────────────────────
+  api:
+    <<: *backend-base
+    container_name: multiagent-api
     environment:
-      - DATABASE_URL=postgresql+asyncpg://multiagent:multiagent@postgres:5432/multiagent_db
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-multiagent}:${POSTGRES_PASSWORD:-multiagent}@postgres:5432/${POSTGRES_DB:-multiagent_db}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/1
-      - DEBUG=false
-      - LOG_LEVEL=INFO
-    env_file:
-      - .env
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - multiagent-net
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - SERVICE_ROLE=api
+      - UVICORN_WORKERS=${UVICORN_WORKERS:-2}
+    ports:
+      - "${API_PORT:-8000}:8000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
+      start_period: 20s
       retries: 5
 
-  # ── Frontend Dashboard ───────────────────────────────────────────────
+  # ── Background Worker ───────────────────────────────────────────────────────
+  worker:
+    <<: *backend-base
+    container_name: multiagent-worker
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-multiagent}:${POSTGRES_PASSWORD:-multiagent}@postgres:5432/${POSTGRES_DB:-multiagent_db}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - SERVICE_ROLE=worker
+      - CELERY_CONCURRENCY=${CELERY_CONCURRENCY:-4}
+    healthcheck:
+      test: ["CMD", "celery", "-A", "backend.worker.celery_app", "inspect", "ping", "--timeout", "5"]
+      interval: 30s
+      timeout: 15s
+      start_period: 30s
+      retries: 3
+
+  # ── Frontend ────────────────────────────────────────────────────────────────
   frontend:
     build:
       context: .
       dockerfile: Dockerfile.frontend
     container_name: multiagent-frontend
     ports:
-      - "3000:80"
+      - "${FRONTEND_PORT:-3000}:80"
     depends_on:
-      - backend
-    restart: unless-stopped
+      api:
+        condition: service_healthy
     networks:
       - multiagent-net
+    restart: unless-stopped
 
-  # ── PostgreSQL ───────────────────────────────────────────────────────
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: multiagent-postgres
     environment:
-      POSTGRES_USER: multiagent
-      POSTGRES_PASSWORD: multiagent
-      POSTGRES_DB: multiagent_db
+      # Injected at runtime – NOT hardcoded here.
+      # Set POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB in .env
+      POSTGRES_USER:     ${POSTGRES_USER:-multiagent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-multiagent}
+      POSTGRES_DB:       ${POSTGRES_DB:-multiagent_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - multiagent-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U multiagent -d multiagent_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-multiagent} -d ${POSTGRES_DB:-multiagent_db}"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    # Postgres port intentionally NOT exposed to host in production.
+    # Uncomment below for local debugging only:
+    # ports:
+    #   - "5432:5432"
 
-  # ── Redis ────────────────────────────────────────────────────────────
+  # ── Redis ───────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: multiagent-redis
-    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    command: >
+      redis-server
+      --maxmemory ${REDIS_MAX_MEMORY:-512mb}
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:-}
     volumes:
       - redis_data:/data
     networks:
@@ -77,38 +136,29 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    # Redis port intentionally NOT exposed to host.
+    # ports:
+    #   - "6379:6379"
 
-  # ── Prometheus ───────────────────────────────────────────────────────
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: multiagent-prometheus
+  # ── Log Query Interface (Dozzle) ────────────────────────────────────────────
+  # Dozzle is a lightweight, zero-config Docker log viewer.
+  # It reads directly from the Docker socket – no extra storage or index needed.
+  # Access at http://localhost:9999
+  # Filter by container name, search full-text, stream live tails.
+  logs:
+    image: amir20/dozzle:latest
+    container_name: multiagent-logs
     volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.retention.time=7d'
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     ports:
-      - "9090:9090"
-    networks:
-      - multiagent-net
-    restart: unless-stopped
-
-  # ── Grafana ──────────────────────────────────────────────────────────
-  grafana:
-    image: grafana/grafana:latest
-    container_name: multiagent-grafana
+      - "${LOGS_PORT:-9999}:8080"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
-      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
-    ports:
-      - "3001:3000"
-    depends_on:
-      - prometheus
+      # Restrict Dozzle to only show this project's containers
+      DOZZLE_FILTER:  "name=multiagent-"
+      DOZZLE_LEVEL:   "${LOG_LEVEL:-info}"
+      # Set DOZZLE_USERNAME + DOZZLE_PASSWORD in .env to enable auth
+      DOZZLE_USERNAME: ${DOZZLE_USERNAME:-}
+      DOZZLE_PASSWORD: ${DOZZLE_PASSWORD:-}
     networks:
       - multiagent-net
     restart: unless-stopped
@@ -116,8 +166,6 @@ services:
 volumes:
   postgres_data:
   redis_data:
-  prometheus_data:
-  grafana_data:
 
 networks:
   multiagent-net:

@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: Optional[str] = Field(default=None)
 
     # --- LLM Configuration ---
-    DEFAULT_MODEL: str = "gpt-4o-mini"
-    FALLBACK_MODEL: str = "groq/llama3-8b-8192"
+    DEFAULT_MODEL: str = "groq/llama-3.3-70b-versatile"
+    FALLBACK_MODEL: str = "groq/llama-3.1-8b-instant"
     MAX_TOKENS: int = 4096
     TEMPERATURE: float = 0.7
     MAX_RETRIES: int = 3

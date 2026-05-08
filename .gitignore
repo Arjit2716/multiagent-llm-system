@@ -1,15 +1,33 @@
+# Secrets & local config — NEVER commit
 .env
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 .pytest_cache/
 htmlcov/
 .coverage
-dist/
-node_modules/
 *.egg-info/
+
+# Virtual environments
 .venv/
 venv/
+
+# Build output
+dist/
+node_modules/
+
+# Local SQLite database (contains runtime data, not source)
+*.db
+*.sqlite
+*.sqlite3
+
+# Docker volume mount points
 postgres_data/
 redis_data/
+
+# Logs & eval artifacts
 *.log
+eval_harness_latest.json

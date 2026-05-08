@@ -2,26 +2,32 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System dependencies
+# ── System deps ───────────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Python dependencies
-COPY backend/requirements.txt .
+# ── Python deps ───────────────────────────────────────────────────────────────
+COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Application code
+# ── Application code ──────────────────────────────────────────────────────────
 COPY backend/ ./backend/
 COPY pytest.ini ./
+COPY entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
 
-# Non-root user for security
+# ── Non-root user ─────────────────────────────────────────────────────────────
 RUN useradd -r -u 1001 appuser && chown -R appuser:appuser /app
 USER appuser
 
+# SERVICE_ROLE controls behaviour: "api" (default) or "worker"
+# All secrets and connection strings come from the runtime environment only.
+ENV SERVICE_ROLE=api
+
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["uvicorn", "backend.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+ENTRYPOINT ["./entrypoint.sh"]
